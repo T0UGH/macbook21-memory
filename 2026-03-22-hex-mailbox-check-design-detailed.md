@@ -219,7 +219,24 @@ function generateSuggestion(mail): string {
 
 ## 五、触发时机
 
-### 触发 1：每次处理完用户消息后（推荐）
+### 触发方式：定时检查（推荐）
+
+类似 OpenClaw 的 heartbeat 机制，Hex 定期主动检查 mailbox：
+
+```typescript
+// 每 5 分钟检查一次
+setInterval(async () => {
+  await checkMailbox();
+}, 5 * 60 * 1000);
+```
+
+**为什么推荐定时检查**：
+- 不依赖用户发消息
+- 用户不发消息时也能处理邮件
+- 更像"后台服务"的主动模式
+- 和 OpenClaw heartbeat 机制类似
+
+### 备选：每次处理完用户消息后检查
 
 Hex 处理完用户消息后，顺手检查 mailbox：
 
@@ -235,16 +252,9 @@ async function handleUserMessage(message: string) {
 }
 ```
 
-### 触发 2：定时检查（可选）
-
-如果需要更主动的检查，可以加定时器：
-
-```typescript
-// 每 5 分钟检查一次
-setInterval(async () => {
-  await checkMailbox();
-}, 5 * 60 * 1000);
-```
+**这个方案的缺点**：
+- 只有用户主动发消息时才检查
+- 用户不发消息时邮件会堆积
 
 ---
 
@@ -281,5 +291,5 @@ Hex 需要能执行 shell 命令并获取输出。
 ## 八、待确认问题
 
 1. **处理方式**：上面流程用的是"通知用户 + 可选回复草稿"，是否OK？
-2. **定时检查**：是否需要加定时器（5分钟一次）？
+2. **定时间隔**：5 分钟是否合适？（可调整）
 3. **CLI 路径**：mailbox CLI 是否已经在 Hex 工作目录下可用？

@@ -113,14 +113,15 @@ V1 建议至少包含以下核心表：
 1. `agents`
 2. `threads`
 3. `messages`
-4. `events`
-5. `obligations`
-6. `representatives`
+4. `message_states`
+5. `events`
+6. `obligations`
+7. `representatives`
 
 建议再加入两个辅助表：
 
-7. `deliveries`
-8. `agent_checkpoints`
+8. `deliveries`
+9. `agent_checkpoints`
 
 ---
 
@@ -133,6 +134,7 @@ V1 建议至少包含以下核心表：
 建议字段：
 
 - `agent_id`
+- `primary_address`
 - `name`
 - `role`
 - `node_label`
@@ -146,6 +148,8 @@ V1 建议至少包含以下核心表：
 说明：
 
 - `agent_id` 建议使用稳定字符串，如 `mt` / `zhigeng`
+- `primary_address` 用于承载邮箱式地址语义，如 `mt@local.agent` / `zhigeng@local.agent`
+- `agent_id` 是内部稳定身份，`primary_address` 是对外展示与邮件语义地址
 - 这张表本质上是轻量 registry，而不是复杂的人格建模系统
 
 ---
@@ -198,10 +202,44 @@ V1 建议至少包含以下核心表：
 - `body_markdown` 直接保存正文 markdown
 - `.mail.md` 可作为 mirror / export，而不是唯一权威存储
 - `accepted_at` 是 canonical 生命周期的关键时间点，值得单独保留
+- V1 中 `type` 应限制为固定 5 种：`request` / `inform` / `proposal` / `report` / `alert`
+- 该约束建议同时通过 API 校验与数据库 `CHECK` 约束实现，避免类型语义漂移
+- obligation 清除规则不单独抽表，作为 server-side hard rule 固化在实现中：仅 `report` / `proposal` / `request` 可清除 obligation，且必须满足同 thread、带 `in_reply_to`、并指向 obligation 源 message
+- 若以 `request` 回复 `request`，则旧 obligation 清除，同时新 request 开启新的 obligation
 
 ---
 
-### 5.4 `events`
+### 5.4 `message_states`
+
+用于表达某个 agent 对某封 message 的 mailbox 视图状态，是 per-message per-agent 的 projection 层。
+
+建议字段：
+
+- `state_id`
+- `message_id`
+- `agent_id`
+- `mailbox_role`
+- `is_archived`
+- `archived_at`
+- `seen_at`
+- `replied_at`
+- `created_at`
+- `updated_at`
+
+说明：
+
+- V1 采用 **per-message per-agent** 模型，而不是只对收件人建状态
+- 一封 message 对 sender 和 recipient 都各有一条状态记录
+- `mailbox_role` 取值建议为 `sender` / `recipient`
+- `archive` 作为附加状态，与 `mailbox_role` 拆开建模，不再使用单独的 `mailbox_location` 枚举承载 inbox/outbox/archive 三种含义
+- `unread` 不单独存字段，建议由 `mailbox_role='recipient' AND seen_at IS NULL` 推导
+- `replied_at` 主要对 recipient 侧有意义，sender 侧不依赖该字段表达“收到回复”
+- `state_id` 作为工程引用主键保留，同时应对 `(message_id, agent_id)` 建立唯一约束，确保一封 message 对一个 agent 只有一条当前状态记录
+- `messages` 仍保存邮件本体；`message_states` 保存 mailbox consumption/view 层状态
+
+---
+
+### 5.5 `events`
 
 保存系统事实流，是 lifecycle 的底层记录。
 
@@ -225,7 +263,7 @@ V1 建议至少包含以下核心表：
 
 ---
 
-### 5.5 `obligations`
+### 5.6 `obligations`
 
 显式记录“哪些邮件欠回复”。
 
@@ -248,12 +286,13 @@ V1 建议至少包含以下核心表：
 
 ---
 
-### 5.6 `representatives`
+### 5.7 `representatives`
 
 记录 agent 当前 active representative。
 
 建议字段：
 
+- `representative_id`
 - `agent_id`
 - `machine_id`
 - `machine_label`
@@ -262,15 +301,20 @@ V1 建议至少包含以下核心表：
 - `deactivated_at`
 - `last_heartbeat_at`
 - `metadata_json`
+- `created_at`
+- `updated_at`
 
 说明：
 
 - V1 是手动切换，但这张表仍然必要
+- `representatives` 建议按“代表任期（term-like record）”建模，而不是纯当前关系表
+- 因此增加 `representative_id` 作为独立主键；同一 `agent_id + machine_id` 在不同时间可出现多条记录，表示不同任期
 - 一个 agent 同时只能存在一个 active representative
+- 该约束应作为 V1 硬规则写入设计，并在数据库层通过 **`UNIQUE(agent_id) WHERE is_active = 1`** 一类的部分唯一约束实现，同时由应用层切换事务进一步保证无双活窗口
 
 ---
 
-### 5.7 `deliveries`
+### 5.8 `deliveries`
 
 记录投递状态与重试基础数据。
 
@@ -293,7 +337,7 @@ V1 建议至少包含以下核心表：
 
 ---
 
-### 5.8 `agent_checkpoints`
+### 5.9 `agent_checkpoints`
 
 记录 agent / representative 的拉取同步位置。
 
@@ -313,15 +357,85 @@ V1 建议至少包含以下核心表：
 
 ---
 
-## 6. 当前技术路线总结
+## 6. Local Runtime State（非 canonical）
 
-V1 Agent Mailbox 当前建议实现路线可概括为：
+除 server canonical schema 外，V1 还需要一层**本地 runtime state**，用于承载本机已发生但尚未完成 canonical 接纳或同步确认的动作。
 
-> **一个以 SQLite 为 canonical source、通过 HTTP JSON API 提供局域网多机访问、客户端按纯拉模型同步，并使用 event + projection 组织状态的异步 agent mailbox 系统。**
+这层状态：
+
+- **必须显式建模**
+- **不属于 server canonical schema**
+- **建议以每台机器本地 SQLite 实现**
+- 服务于 `submitted -> accepted` 过渡、`pending seen`、`retry-sync` 等运行时恢复场景
+
+### 6.1 `outbound_messages`
+用于记录：
+
+> 本地已提交发送、但尚未被 server canonical `accepted` 的发信动作。
+
+它应承载：
+
+- 本地待提交 mail 内容
+- submit 时间
+- 当前重试状态
+- 与 server ack 之间的过渡态信息
+
+### 6.2 `pending_events`
+用于记录：
+
+> 本地已发生、但尚未成功同步给 server 的 mailbox 事件。
+
+典型包括：
+
+- `seen` 上报失败后的待重试事件
+- 其他本地产生但尚未被 server 确认的 mailbox event
+
+### 6.3 `memory_receipts`
+用于记录：
+
+> 关键 mailbox event 是否已为某个 agent 成功写入最小 memory receipt。
+
+建议字段：
+
+- `receipt_id`
+- `event_id`
+- `agent_id`
+- `message_id`
+- `thread_id`
+- `receipt_type`
+- `sync_status`
+- `synced_at`
+- `last_error`
+- `created_at`
+- `updated_at`
+
+说明：
+
+- `memory_receipts` 属于 **client/local runtime 行为**，不属于 server canonical schema
+- V1 采用 **按 event 记 receipt** 的模型，而不是按 message 记
+- 同一个 event 可对多个 agent 分别产生各自的 memory receipt
+- `receipt_type` 用于表达 memory 侧语义，不等于 `event_type`
+- `sync_status` 在 V1 仅保留 `pending` / `synced` / `failed`
+- `thread_id` 建议非空；`message_id` 可空
+- `receipt_id` 作为工程引用主键保留，同时应对 `(event_id, agent_id, receipt_type)` 建立唯一约束，避免重复 receipt
+- 该对象不保存完整 memory 正文，只保存最小 receipt 的同步/落地状态
+
+### 6.4 边界说明
+- `memory_receipts` 不应混入 `pending_events`
+- mailbox canonical event sync 与 memory sync 应视为两条不同链路
+- local runtime state 负责“怎么补上尚未完成的动作”，server canonical schema 负责“最终真相”
 
 ---
 
-## 7. 下一步待细化的设计主题
+## 7. 当前技术路线总结
+
+V1 Agent Mailbox 当前建议实现路线可概括为：
+
+> **一个以 SQLite 为 canonical source、通过 HTTP JSON API 提供局域网多机访问、客户端按纯拉模型同步，并使用 event + projection 组织状态，同时配有每机本地 runtime state 以承载 outbound queue 与 pending sync 的异步 agent mailbox 系统。**
+
+---
+
+## 8. 下一步待细化的设计主题
 
 后续建议按以下顺序继续细化：
 
@@ -333,7 +447,7 @@ V1 Agent Mailbox 当前建议实现路线可概括为：
 
 ---
 
-## 8. 当前决策状态
+## 9. 当前决策状态
 
 ### 已基本确定
 - SQLite + `.mail.md` 镜像
