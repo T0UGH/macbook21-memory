@@ -49,3 +49,10 @@ docker info
 - `T0UGH/openclaw-mailbox-server` - Go 实现
 - `T0UGH/openclaw-mailbox-cli` - Node.js CLI
 - `T0UGH/openclaw-mailbox-plugin` - OpenClaw 插件
+
+---
+
+## 周末研究
+
+- [ ] 研究 `icebear0828/codex-proxy`
+  - 链接：<https://github.com/icebear0828/codex-proxy>

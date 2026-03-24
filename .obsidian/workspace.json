@@ -1,0 +1,35 @@
+{
+  "main": {
+    "id": "main",
+    "type": "split",
+    "children": [
+      {
+        "id": "home-leaf",
+        "type": "leaf",
+        "state": {
+          "type": "markdown",
+          "state": {
+            "file": "00-Home/Home.md",
+            "mode": "source",
+            "source": false
+          }
+        }
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "left",
+    "type": "split",
+    "children": []
+  },
+  "right": {
+    "id": "right",
+    "type": "split",
+    "children": []
+  },
+  "active": "home-leaf",
+  "lastOpenFiles": [
+    "00-Home/Home.md"
+  ]
+}
